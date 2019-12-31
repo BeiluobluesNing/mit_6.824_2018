@@ -2,6 +2,10 @@ package mapreduce
 
 import (
 	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"os"
+	"encoding/json"
 )
 
 func doMap(
@@ -35,7 +39,6 @@ func doMap(
 	// Coming up with a scheme for how to format the key/value pairs on
 	// disk can be tricky, especially when taking into account that both
 	// keys and values could contain newlines, quotes, and any other
-	// character you can think of.
 	//
 	// One format often used for serializing data to a byte stream that the
 	// other end can correctly reconstruct is JSON. You are not required to
@@ -53,6 +56,29 @@ func doMap(
 	//
 	// Your code here (Part I).
 	//
+	inputfile,err := ioutil.ReadFile(inFile)
+	if err != nil{
+		log.Fatal("Error in domap io:",err)
+	}
+	// make 分配一个array, type = os.File ,num = nReduce 
+	outputfile := make([] *os.File,nReduce)
+	for i := 0;i<nReduce;i++{
+		fName := reduceName(jobName,mapTask,i)
+		outputfile[i],err = os.Create(fName)
+		if err != nil{
+			log.Fatal("Error in creat file:",fName)
+		}
+	}
+
+	keyvaluepair := mapF(inFile,string(inputfile))
+	for _, kv:= range keyvaluepair{
+		index := ihash(kv.Key)%nReduce
+		enc := json.NewEncoder(outputfile[index])
+		enc.Encode(kv)
+	}
+	for _,file := range outputfile{
+		file.Close()
+	}
 }
 
 func ihash(s string) int {
