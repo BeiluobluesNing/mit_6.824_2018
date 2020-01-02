@@ -3,7 +3,10 @@ package main
 import (
 	"fmt"
 	"mapreduce"
+	"strings"
+	"unicode"
 	"os"
+	"strconv"
 )
 
 //
@@ -15,6 +18,15 @@ import (
 //
 func mapF(filename string, contents string) []mapreduce.KeyValue {
 	// Your code here (Part II).
+	//首先将contents中的字符串分割开，得到一个[]string,然后返回一对一对的slice
+	words := strings.FieldsFunc(contents,func(r rune) bool{
+		return !unicode.IsLetter(r)
+	})
+	res := make([]mapreduce.KeyValue,0)
+	for _,word := range words{
+		res = append(res,mapreduce.KeyValue{word,""})
+	}
+	return res
 }
 
 //
@@ -24,6 +36,8 @@ func mapF(filename string, contents string) []mapreduce.KeyValue {
 //
 func reduceF(key string, values []string) string {
 	// Your code here (Part II).
+	//需要的是values的长度
+	return strconv.Itoa(len(values))
 }
 
 // Can be run in 3 ways:
