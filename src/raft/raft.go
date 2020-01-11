@@ -18,7 +18,14 @@ package raft
 //
 
 import "sync"
-import "labrpc"
+import (
+	"labrpc"
+	"time"
+	"math/rand"
+	"sort"
+	"bytes"
+	"labgob"
+)
 
 // import "bytes"
 // import "labgob"
@@ -41,6 +48,20 @@ type ApplyMsg struct {
 	Command      interface{}
 	CommandIndex int
 }
+//LogEntry
+type LogEntry struct{
+	Term 	int
+	Command interface{}
+}
+
+
+// States
+const(
+	//iota 常量， leader = 0; Follower = 1; Candidate = 2;
+	Leader = iota
+	Follower
+	Candidate
+)
 
 //
 // A Go object implementing a single Raft peer.
@@ -55,6 +76,23 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	//Persistent state on all servers:
+	currentTerm int 
+	votedFor	int 
+	log 		[]LogEntry
+
+	// Volatile state on all servers
+	commitIndex int 	//largest log commit number
+	lastApplied int 	//largest logentry applied to state machine 
+
+	// Volatile states on leaders
+	nextIndex  []int 	//next log entry to send to server
+	matchIndex []int 	//highest log entry to be replicated to server 
+
+	state 			int // Leader,Follower, Candidate
+	electiontimeout	time.Duaration //
+	electionTimer *time.Timer
+
 }
 
 // return currentTerm and whether this server
@@ -64,6 +102,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	term = rf.currentTerm
+	isleader = rf.state == Leader//一行解决
 	return term, isleader
 }
 
@@ -116,6 +158,10 @@ func (rf *Raft) readPersist(data []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term int //candidate Term
+	CandidateId int //candidate requesting vote
+	LastlogIndex int //index of candidate's last log entry
+	Lastlogterm int // term of candidate’s last log entry
 }
 
 //
@@ -124,6 +170,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term 	int 		// 
+	VoteGranted	bool  	//true mean candidated received vote 
 }
 
 //
@@ -131,6 +179,45 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if args.Term < rf.currentTerm
+	{
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+	}
+	else
+	{
+		//sender data is stale 
+		if args.term > rf.currentTerm
+		{
+			rf.currentTerm = args.Term
+			rf.votedFor = -1
+			rf.state = Follower
+		}
+		reply.Term = rf.currentTerm
+
+		//decide whether to vote for sender 
+		if rf.votedFor = -1 
+		{
+			LastlogIndex := len(rf.log) -1
+			Lastlogterm := rf.log[LastlogIndex].Term
+			if args.Lastlogterm > Lastlogterm ||
+			(args.Lastlogterm == Lastlogterm && 
+				args.LastlogIndex >= LastlogIndex)
+				{
+					rf.votedFor = args.CandidateId
+					rf.state = Follower
+					rf.electionTimer.Reset(rf.electiontimeout)
+					reply.VoteGranted = true
+				}
+				else
+				{
+					reply.VoteGranted = false
+				}
+		}
+	}
+
 }
 
 //
