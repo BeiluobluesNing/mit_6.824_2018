@@ -87,6 +87,7 @@ type Raft struct {
 	state           int           // Leader,Follower, Candidate
 	electiontimeout time.Duration //
 	electionTimer   *time.Timer
+	commitCond      *sync.Cond //commitIndex update
 }
 
 // return currentTerm and whether this server
@@ -234,6 +235,69 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
+}
+
+//有提到需要新的函数AppendEntries
+//agrs of AppendEntries RPC
+type AppendEntriesArgs struct {
+	Term         int
+	LeaderId     int
+	PreLogIndex  int
+	PreLogTerm   int
+	Entries      []LogEntry
+	LeaderCommit int
+}
+
+//reply of AppendRntries RPC
+type AppendEntriesReply struct {
+	Term          int
+	AppendSuccess bool
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if args.Term < rf.currentTerm {
+		//sender data is stale
+		reply.Term = rf.currentTerm
+		reply.AppendSuccess = false
+	} else {
+		if args.Term > rf.currentTerm {
+			rf.currentTerm = args.Term
+		}
+		// change the membership
+		// 此时有新的Entries
+		if rf.state == Leader {
+			rf.state = Follower
+			rf.votedFor = -1
+			rf.electionTimer = time.NewTimer(rf.electiontimeout)
+		} else {
+			rf.electionTimer.Reset(rf.electionTimer)
+		}
+		reply.Term = rf.currentTerm
+
+		// Append success or not
+		if args.PreLogIndex >= len(rf.log) || rf.log[agrs.PreLogIndex].Term != agrs.PreLogTerm {
+			reply.AppendSuccess = false
+		} else {
+			rf.log = rf.log[:args.PreLogIndex+1]
+			rf.log = append(rf.log, args.Entries...)
+			if args.LeaderCommit > rf.commitIndex {
+				rf.commitIndex = min(args.LeaderCommit, len(rf.log)-1)
+				rf.commitCond.Broadcast()
+			}
+			reply.AppendSuccess = true
+		}
+	}
+	rf.persist()
+}
+
+func min(a int, b int) int {
+	if a < b {
+		return a
+	} else {
+		return b
+	}
 }
 
 //
