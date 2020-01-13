@@ -88,6 +88,7 @@ type Raft struct {
 	electiontimeout time.Duration //
 	electionTimer   *time.Timer
 	commitCond      *sync.Cond //commitIndex update
+	applyCh         chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -353,7 +354,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-	// Your initialization code here (2A, 2B, 2C).
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.log = make([]LogEntry, 1)
@@ -366,5 +366,39 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	go rf.launchElection()
 	return rf
+}
+
+//launch the sevrer election
+func (rf *Raft) launchElection() {
+	for {
+		//When the Timer expires, the current time will be sent on C
+		<-rf.electionTimer.C
+
+		if _, isLeader := rf.GetState; isLeader {
+			//only non-Leader can launch election
+			rf.electionTimer.Stop()
+			return
+		}
+		go rf.RequestVotes()
+		rf.electionTimer.Reset(rf.electiontimeout)
+	}
+}
+
+//send all message to tester or service
+func (rf Raft) sendApplyMsgs() {
+	for {
+		rf.mu.Lock()
+		for rf.lastApplied == rf.commitIndex {
+			rf.commitCond.Wait()
+		}
+		if rf.lastApplied < rf.commitIndex {
+			for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+				rf.applyCh <- ApplyMsg{true, rf.log[i].Command, i}
+			}
+		}
+		rf.lastApplied = rf.commitIndex
+		rf.mu.Unlock()
+	}
 }
