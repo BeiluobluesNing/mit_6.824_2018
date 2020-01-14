@@ -87,7 +87,11 @@ type Raft struct {
 	state           int           // Leader,Follower, Candidate
 	electiontimeout time.Duration //
 	electionTimer   *time.Timer
-	commitCond      *sync.Cond //commitIndex update
+	hrtbttimeout    time.Duration
+	heartbeatTimer  *time.Timer    //Timer of sending heartbeats
+	logInterval     *time.Duration //interval between apply two logs
+	logTimer        *time.Timer    //Timer of apply log
+	commitCond      *sync.Cond     //commitIndex update
 	applyCh         chan ApplyMsg
 }
 
@@ -367,6 +371,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	go rf.launchElection()
+	go rf.sendApplyMsgs()
 	return rf
 }
 
@@ -385,6 +390,65 @@ func (rf *Raft) launchElection() {
 		rf.electionTimer.Reset(rf.electiontimeout)
 	}
 }
+func (rf *Raft) RequestVotes() {
+	rf.mu.Lock()
+	rf.state = Candidate
+	rf.currentTerm += 1
+	rf.votedFor = rf.me
+
+	args := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me,
+		LastlogIndex: len(rf.log) - 1,
+		Lastlogterm:  rf.log[len(rf.log)-1].Term}
+	rf.mu.Unlock()
+
+	numVotes := 1
+	numPeers := len(rf.peers)
+	for i := 0; i < numPeers; i++ {
+		if i != rf.me {
+			go func(i int) {
+				var reply RequestVoteReply
+				if rf.sendRequestVote(i, &args, &reply) {
+					rf.mu.Lock()
+					if rf.state == Candidate {
+						if reply.Term > rf.currentTerm {
+							//Candidate has stale term, turn to Follower
+							rf.currentTerm = reply.Term
+							rf.votedFor = -1
+							rf.state = Follower
+							rf.electionTimer.Reset(rf.electiontimeout)
+							rf.persist()
+						} else if reply.VoteGranted {
+							numVotes++
+							if numVotes > numPeers/2 {
+								//Candidate is th leader
+								rf.state = Leader
+								rf.electionTimer.Reset(rf.electiontimeout)
+								for j := 0; j < numPeers; j++ {
+									rf.nextIndex[j] = len(rf.log)
+									if j == rf.me {
+										rf.matchIndex[j] = len(rf.log) - 1
+									} else {
+										rf.matchIndex[j] = 0
+									}
+								}
+								rf.heartbeatTimer = time.NewTimer(rf.hrtbttimeout)
+								rf.logTimer = time.NewTimer(rf.logInterval)
+								go rf.sendHeartbeats()
+								go rf.sendLogs()
+							}
+						}
+					}
+				}
+			}(i)
+		}
+	}
+}
+
+// send heartbeats to all other server
+func (rf *Raft) sendHeartbeats() {}
+
+//send logs to all other server
+func (rf *Raft) sendLogs() {}
 
 //send all message to tester or service
 func (rf Raft) sendApplyMsgs() {
