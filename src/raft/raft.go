@@ -305,6 +305,12 @@ func min(a int, b int) int {
 	}
 }
 
+// send an AppendEntries RPC to a server.
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -445,7 +451,42 @@ func (rf *Raft) RequestVotes() {
 }
 
 // send heartbeats to all other server
-func (rf *Raft) sendHeartbeats() {}
+func (rf *Raft) sendHeartbeats() {
+	for{
+		if _, isLeader := rf.GetState(); !isLeader{
+			rf.heartbeatTimer.Stop()
+			return
+		}
+		for i:=0; i<len(rf.peers); i++{
+			if i!=rf.me {
+				go func(i int){
+					rf.mu.Lock()
+					defer rf.mu.Unlock()
+					args = AppendEntriesArgs{Term: rf.currentTerm,LeaderId:rf.me,
+					 PreLogIndex:rf.nextIndex[i] -1,
+					 PreLogTerm :rf.log[rf.nextIndex[i] - 1].Term,
+					 Entries: nil, LeaderCommit:rf.commitIndex }
+					 go func(){
+					 	var reply AppendEntriesReply
+					 	if rf.sendAppendEntries(i,&args,&reply){
+					 		rf.mu.Lock()
+					 		if rf.state == Leader && reply.Term >rf.currentTerm{
+					 			rf.state = Follower
+					 			rf.votedFor = -1
+					 			rf.electionTimer = time.NewTimer(rf.electiontimeout)
+					 			rf.persist
+					 			go rf.launchElection()
+					 		}
+					 		rf.mu.Unlock
+					 	}
+					}
+				}
+			}
+		}
+		rf.heartbeatTimer.Reset(rf.hrtbttimeout)
+		<-rf.heartbeatTimer.C
+	}
+}
 
 //send logs to all other server
 func (rf *Raft) sendLogs() {}
