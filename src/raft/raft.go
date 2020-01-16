@@ -489,7 +489,54 @@ func (rf *Raft) sendHeartbeats() {
 }
 
 //send logs to all other server
-func (rf *Raft) sendLogs() {}
+func (rf *Raft) sendLogs() {
+	for{
+		if _,isLeader := rf.GetState(); !isLeader{
+			rf.logTimer.Stop()
+			return
+		}
+		for i:= 0; i <len(rf.peers);i++{
+			if i != rf.me{
+				go func(i int){
+					rf.mu.Lock()
+					defer rf.mu.Unlock()
+					if len(rf.log) > rf.nextIndex[i]{
+						args := AppendEntriesArgs{Term: currentTerm,
+						 LeaderId: rf.me,PreLogIndex:rf.nextIndex[i] - 1,
+						 PreLogTerm: rf.log[rf.nextIndex[i]-1].Term,
+						 LeaderCommit:rf.commitIndex}
+						args.Entries = make([]LogEntry, len(rf.log)-rf.nextIndex[i])
+						copy(args.Entries,rf.log[rf.nextIndex[i]:])
+						go func(){
+							var reply AppendEntriesReply
+							if rf.sendAppendEntries(i,&args,&reply){
+								if reply.success{
+									rf.matchIndex[i] = len(rf.log)-1
+									rf.nextIndex[i] = rf.matchIndex[i] +1
+									rf.updateCommitIndex()
+								} else if rf.state == Leader && reply.Term >rf.currentTerm{
+									rf.state = Follower
+									rf.votedFor = -1
+									rf.electionTimer = time.NewTimer(rf.electiontimeout)
+									go rf.launchElection
+								} else {
+									rf.nextIndex[i]--
+								}
+									rf.mu.Unlock()
+								}
+							}()
+						}
+					}(i)
+				}
+				rf.logTimer.Reset(rf.logInterval)
+				<-rf.logTimer.C
+			}
+		}
+		
+
+
+//try to update leader commit index
+func (rf *Raft) updateCommitIndex() {}
 
 //send all message to tester or service
 func (rf Raft) sendApplyMsgs() {
