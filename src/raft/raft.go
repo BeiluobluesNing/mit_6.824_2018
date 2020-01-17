@@ -21,6 +21,7 @@ import "sync"
 import (
 	"labrpc"
 	"math/rand"
+	"sort"
 	"time"
 )
 
@@ -452,35 +453,35 @@ func (rf *Raft) RequestVotes() {
 
 // send heartbeats to all other server
 func (rf *Raft) sendHeartbeats() {
-	for{
-		if _, isLeader := rf.GetState(); !isLeader{
+	for {
+		if _, isLeader := rf.GetState(); !isLeader {
 			rf.heartbeatTimer.Stop()
 			return
 		}
-		for i:=0; i<len(rf.peers); i++{
-			if i!=rf.me {
-				go func(i int){
+		for i := 0; i < len(rf.peers); i++ {
+			if i != rf.me {
+				go func(i int) {
 					rf.mu.Lock()
 					defer rf.mu.Unlock()
-					args = AppendEntriesArgs{Term: rf.currentTerm,LeaderId:rf.me,
-					 PreLogIndex:rf.nextIndex[i] -1,
-					 PreLogTerm :rf.log[rf.nextIndex[i] - 1].Term,
-					 Entries: nil, LeaderCommit:rf.commitIndex }
-					 go func(){
-					 	var reply AppendEntriesReply
-					 	if rf.sendAppendEntries(i,&args,&reply){
-					 		rf.mu.Lock()
-					 		if rf.state == Leader && reply.Term >rf.currentTerm{
-					 			rf.state = Follower
-					 			rf.votedFor = -1
-					 			rf.electionTimer = time.NewTimer(rf.electiontimeout)
-					 			rf.persist
-					 			go rf.launchElection()
-					 		}
-					 		rf.mu.Unlock
-					 	}
-					}
-				}
+					args = AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me,
+						PreLogIndex: rf.nextIndex[i] - 1,
+						PreLogTerm:  rf.log[rf.nextIndex[i]-1].Term,
+						Entries:     nil, LeaderCommit: rf.commitIndex}
+					go func() {
+						var reply AppendEntriesReply
+						if rf.sendAppendEntries(i, &args, &reply) {
+							rf.mu.Lock()
+							if rf.state == Leader && reply.Term > rf.currentTerm {
+								rf.state = Follower
+								rf.votedFor = -1
+								rf.electionTimer = time.NewTimer(rf.electiontimeout)
+								rf.persist
+								go rf.launchElection()
+							}
+							rf.mu.Unlock()
+						}
+					}()
+				}(i)
 			}
 		}
 		rf.heartbeatTimer.Reset(rf.hrtbttimeout)
@@ -490,53 +491,61 @@ func (rf *Raft) sendHeartbeats() {
 
 //send logs to all other server
 func (rf *Raft) sendLogs() {
-	for{
-		if _,isLeader := rf.GetState(); !isLeader{
+	for {
+		if _, isLeader := rf.GetState(); !isLeader {
 			rf.logTimer.Stop()
 			return
 		}
-		for i:= 0; i <len(rf.peers);i++{
-			if i != rf.me{
-				go func(i int){
+		for i := 0; i < len(rf.peers); i++ {
+			if i != rf.me {
+				go func(i int) {
 					rf.mu.Lock()
 					defer rf.mu.Unlock()
-					if len(rf.log) > rf.nextIndex[i]{
+					if len(rf.log) > rf.nextIndex[i] {
 						args := AppendEntriesArgs{Term: currentTerm,
-						 LeaderId: rf.me,PreLogIndex:rf.nextIndex[i] - 1,
-						 PreLogTerm: rf.log[rf.nextIndex[i]-1].Term,
-						 LeaderCommit:rf.commitIndex}
+							LeaderId: rf.me, PreLogIndex: rf.nextIndex[i] - 1,
+							PreLogTerm:   rf.log[rf.nextIndex[i]-1].Term,
+							LeaderCommit: rf.commitIndex}
 						args.Entries = make([]LogEntry, len(rf.log)-rf.nextIndex[i])
-						copy(args.Entries,rf.log[rf.nextIndex[i]:])
-						go func(){
+						copy(args.Entries, rf.log[rf.nextIndex[i]:])
+						go func() {
 							var reply AppendEntriesReply
-							if rf.sendAppendEntries(i,&args,&reply){
-								if reply.success{
-									rf.matchIndex[i] = len(rf.log)-1
-									rf.nextIndex[i] = rf.matchIndex[i] +1
+							if rf.sendAppendEntries(i, &args, &reply) {
+								if reply.success {
+									rf.matchIndex[i] = len(rf.log) - 1
+									rf.nextIndex[i] = rf.matchIndex[i] + 1
 									rf.updateCommitIndex()
-								} else if rf.state == Leader && reply.Term >rf.currentTerm{
+								} else if rf.state == Leader && reply.Term > rf.currentTerm {
 									rf.state = Follower
 									rf.votedFor = -1
 									rf.electionTimer = time.NewTimer(rf.electiontimeout)
-									go rf.launchElection
+									go rf.launchElection()
 								} else {
 									rf.nextIndex[i]--
 								}
-									rf.mu.Unlock()
-								}
-							}()
-						}
-					}(i)
-				}
-				rf.logTimer.Reset(rf.logInterval)
-				<-rf.logTimer.C
+								rf.mu.Unlock()
+							}
+						}()
+					}
+				}(i)
 			}
+			rf.logTimer.Reset(rf.logInterval)
+			<-rf.logTimer.C
 		}
-		
-
+	}
+}
 
 //try to update leader commit index
-func (rf *Raft) updateCommitIndex() {}
+func (rf *Raft) updateCommitIndex() {
+	matchIndex := make([]int, len(rf.matchIndex))
+	copy(matchIndex, rf.matchIndex)
+	sort.Ints(matchIndex)
+	n := matchIndex[(len(rf.peers)-1)/2]
+	if n > rf.matchIndex && rf.log[n].Term == rf.currentTerm {
+		rf.commitIndex = NewTimer
+		rf.commitCond.Broadcast()
+	}
+}
 
 //send all message to tester or service
 func (rf Raft) sendApplyMsgs() {
