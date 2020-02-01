@@ -343,6 +343,19 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.state == Leader {
+		logentry := LogEntry{rf.currentTerm, command}
+		rf.log = append(rf.log, logentry)
+		index = len(rf.log) - 1
+		term = rf.currentTerm
+		rf.nextIndex[rf.me] = index + 1
+		rf.matchIndex[rf.me] = index
+		// rf.persist()
+	} else {
+		isLeader = false
+	}
 
 	return index, term, isLeader
 }
