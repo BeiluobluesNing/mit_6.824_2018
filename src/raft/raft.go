@@ -19,14 +19,13 @@ package raft
 
 import "sync"
 import (
+	"bytes"
+	"labgob"
 	"labrpc"
 	"math/rand"
 	"sort"
 	"time"
 )
-
-// import "bytes"
-// import "labgob"
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -85,6 +84,7 @@ type Raft struct {
 	nextIndex  []int //next log entry to send to server
 	matchIndex []int //highest log entry to be replicated to server
 
+	shutdown        chan struct{} // shutdown gracefully
 	state           int           // Leader,Follower, Candidate
 	electiontimeout time.Duration //
 	electionTimer   *time.Timer
@@ -118,12 +118,13 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -135,17 +136,21 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var log []LogEntry
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&log) != nil {
+		DPrintf("[%d:%d:%d]: Decode persisted state fail\n", rf.me, rf.state, rf.currentTerm)
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.log = log
+	}
+
 }
 
 //
@@ -352,7 +357,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		term = rf.currentTerm
 		rf.nextIndex[rf.me] = index + 1
 		rf.matchIndex[rf.me] = index
-		// rf.persist()
+		rf.persist()
 	} else {
 		isLeader = false
 	}
@@ -368,6 +373,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.state = Follower
+	close(rf.applyCh)
 }
 
 //
@@ -398,14 +407,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.commitIndex = 0
 	rf.state = Follower
-	rf.electiontimeout = time.Millisecond * time.Duration(500+rand.Intn(500))
+	rf.electiontimeout = time.Millisecond * time.Duration(1500+rand.Intn(500))
 	rf.electionTimer = time.NewTimer(rf.electiontimeout)
-	rf.hrtbttimeout = time.Millisecond * 200
+	rf.hrtbttimeout = time.Millisecond * 1200
 	rf.heartbeatTimer = time.NewTimer(rf.hrtbttimeout)
 	rf.logInterval = time.Millisecond * 60
 	rf.logTimer = time.NewTimer(rf.logInterval)
 	rf.applyCh = applyCh
 	rf.commitCond = sync.NewCond(&rf.mu)
+	rf.shutdown = make(chan struct{})
+
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	DPrintf("[%d:%d:%d]: initialize from state persisted before a crash, rf.state: %d, len(rf.log): %d\n", rf.me, rf.state, rf.currentTerm, rf.state, len(rf.log))
